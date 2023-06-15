@@ -1,0 +1,187 @@
+`timescale 1ns/1ps
+module ahb2apb (
+  HCLK,HRSTn,HWRITE,HSELAPB,HWDATA,HREADY,
+  HRDATA,HADDR,HTRANS, PENABLE,PWRITE,PWDATA,PRDATA,PADDR,PSELx
+);
+  
+  //All Signal Interface
+  
+  ///////// AHB Interface Signal//////////////
+  input wire HCLK;
+  input wire HRSTn;
+  input wire HWRITE,HSELAPB;
+  input wire [1:0]  HTRANS;
+  input wire [31:0] HWDATA;
+  input wire [31:0] HADDR;
+  ///AHB Out signal
+  output reg [31:0] HRDATA;
+  output reg[31:0] HREADY;
+  
+  /////////APB Interface Signals
+  output reg PENABLE;
+  output reg PWRITE,PSELx;
+  output reg [31:0] PWDATA,PADDR;
+  input wire [31:0] PRDATA;
+  
+  ///////////DEFINING The States///////////////
+  `define IDLE     3'b000
+  `define READ     3'b001
+  `define WWAIT    3'b010
+  `define WRITE    3'b011
+  `define WRITEP   3'b100
+  `define WENABLEP 3'b101
+  `define WENABLE  3'b110
+  `define RENABLE  3'b111
+  
+  
+  
+  ///////Much Needed Extra Varibles////////////
+  reg valid,HWrite;
+  reg [2:0] PS,NS;
+  reg [31:0]T_HADDR, T_HWDATA;
+  
+  
+  ///////Shows How Valid will work
+  always@(*) begin	
+    if (HSELAPB==1'b1 && (HTRANS==1'b0 || HTRANS ==1'b1))
+      valid = 1'b1;
+    else
+      valid = 1'b0;
+    
+    if (HRSTn==1'b0)
+      $display("Reset Everything");
+      NS = `IDLE;
+  end
+  
+  always @(posedge HCLK)
+    begin
+      NS=PS;
+    end
+ 
+  ////////// STATE MACHINE 
+  
+  always @ (PS)
+    begin
+      case (PS)
+        `IDLE :
+          begin
+            #10;
+            PENABLE=1'b0;
+            HREADY=1'b1;
+            PSELx=0;
+            if (valid== 1'b0)
+              NS=`IDLE;
+            //At this stage if Valid is 1 definitely there hase to be an logic which will
+            //perform operation like Read or write. But in wirte you have to wai....
+            else if(valid== 1'b1 && HWRITE==1'b0)
+              NS=`READ;
+            // Means HWRITE IS 0----> Read Transfer // 
+            else if  (valid == 1'b1 && HWRITE==1'b1) 
+              NS= `WWAIT;
+            //HWRITE IS 1---> Write Transfer //
+          end
+        
+        
+        //To read the data, AHB is used here to read data from APB 
+        `READ:
+          begin
+            PSELx = 1'b1;
+            PADDR = HADDR;
+            PWRITE=1'b0;
+            PENABLE=1'b0;
+            HREADY=1'b0;
+            NS = `RENABLE;
+          end 
+        
+        `RENABLE:
+          begin
+          PENABLE=1'b1;
+          HRDATA=PRDATA;
+          HREADY=1'b1;
+          if (valid ==1'b1 && HWRITE==1'b0)
+            NS=`READ;
+          else if (valid==1'b0)
+            NS=`IDLE;
+          else if (valid ==1'b1 && HWRITE ==1'b1)
+            NS = `WWAIT;
+        end
+            
+              
+       
+        
+        //This is due to Pipelined structure provided by AHB bus and AHB transfer rate is high/////////
+        `WWAIT:
+          begin
+            PENABLE=1'b0;
+            T_HADDR = HADDR;
+            HWrite = HWRITE;
+            if (valid==1'b1)
+              NS=`WRITE;
+            else if (valid==1'b0)
+              NS=`WRITEP;
+          end
+        
+        //Write operation is begin
+        `WRITE:
+          begin
+            PENABLE=1'b0;
+            // Giving data to APB bus
+            PWDATA=HWDATA;
+            PWRITE=1'b1;
+            HREADY=1'b0;
+            PSELx=1'b1;
+            PADDR=T_HADDR;
+            if (valid ==1'b1)
+              NS=`WENABLEP;
+            else if(valid==1'b0)
+              NS=`WENABLE;
+          end
+        
+        
+        `WRITEP:
+          begin
+            PSELx=1'b1;
+            PADDR=T_HADDR;
+			PWDATA=HWDATA;
+			PWRITE=1'b1;
+			PENABLE=1'b0;
+			HREADY=1'b0;
+			T_HADDR=HADDR;
+			HWrite=HWRITE;
+			NS=`WENABLEP;
+          end
+        
+        `WENABLEP:
+          begin
+			PENABLE=1'b1;
+			HREADY=1'b1;
+			if(valid==1'b0 && HWrite==1'b1)
+			  NS=`WRITE;
+			else if(valid==1'b1 && HWrite==1'b1)
+			  NS=`WRITEP;
+			else if(HWrite==1'b0)
+			  NS=`READ;
+		  end
+            
+        `WENABLE:
+          begin
+            PENABLE=1'b1;
+			HREADY=1'b1;
+			if(valid==1'b1 && HWRITE==1'b0)
+			  NS=`READ;
+			else if(valid==1'b1 && HWRITE==1'b1)
+			  NS=`WWAIT;
+		    else if(valid==1'b0)
+			  NS=`IDLE;
+          end       
+      endcase
+    end 
+  
+  initial begin
+    $dumpfile("dump.vcd");
+    $dumpvars;
+  	#200;
+  end
+  
+      
+endmodule
